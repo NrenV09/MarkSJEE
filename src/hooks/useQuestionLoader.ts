@@ -30,6 +30,42 @@ function yieldToMainThread(): Promise<void> {
   });
 }
 
+/**
+ * Resolves static data path relative to current deployment base (supporting GitHub Pages subpaths)
+ */
+function resolveDataUrl(filename: string): string[] {
+  const base = import.meta.env.BASE_URL || './';
+  const cleanBase = base.endsWith('/') ? base : `${base}/`;
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const pathname = typeof window !== 'undefined' ? window.location.pathname.replace(/\/[^/]*$/, '') : '';
+
+  return [
+    `${cleanBase}data/${filename}`,
+    `./data/${filename}`,
+    `data/${filename}`,
+    `/data/${filename}`,
+    `${origin}${pathname}/data/${filename}`,
+  ];
+}
+
+async function fetchWithFallback(filename: string): Promise<Response> {
+  const candidateUrls = resolveDataUrl(filename);
+  let lastError: Error | null = null;
+
+  for (const url of candidateUrls) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        return res;
+      }
+    } catch (e: any) {
+      lastError = e;
+    }
+  }
+
+  throw new Error(lastError?.message || `404: Could not locate data/${filename} across candidate paths`);
+}
+
 export function useQuestionLoader(onComplete?: () => void) {
   const [progress, setProgress] = useState<SyncProgressState>({
     isSyncing: false,
