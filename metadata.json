@@ -1,0 +1,6 @@
+{
+  "name": "MarksJEE - Offline JEE Main & Advanced PYQ Practice",
+  "description": "Offline-first JEE Main & Advanced Previous Year Questions (PYQs) platform with KaTeX math rendering, CBT mock exam mode, chapter analytics, and Marks-style question solving.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
