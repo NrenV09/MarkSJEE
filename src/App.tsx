@@ -119,9 +119,9 @@ export default function App() {
       // Auto-load starter library
       const autoSync = async () => {
         try {
-          const res = await fetch('/data/maths_pyqs.json');
-          if (res.ok) {
-            const data = await res.json();
+          const { fetchJsonData } = await import('./utils/fetchDataFile');
+          const data = await fetchJsonData('maths_pyqs.json');
+          if (Array.isArray(data) && data.length > 0) {
             const { bulkInsertQuestionsChunk } = await import('./db/db');
             await bulkInsertQuestionsChunk(data);
             await refreshStats();

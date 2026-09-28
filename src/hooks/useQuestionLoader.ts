@@ -1,11 +1,13 @@
 /**
- * useQuestionLoader.ts / useQuestionLoader.js
+ * useQuestionLoader.ts
  * High-performance hook for loading & bulk-storing multi-megabyte JSON packs
  * into IndexedDB in non-blocking batches without freezing the main UI thread.
+ * Supports GitHub Pages subpaths and relative asset resolution.
  */
 
 import { useState, useCallback, useRef } from 'react';
-import { db, QuestionRecord, bulkInsertQuestionsChunk, getDatabaseStats } from '../db/db';
+import { db, QuestionRecord, bulkInsertQuestionsChunk } from '../db/db';
+import { fetchJsonData } from '../utils/fetchDataFile';
 
 export interface SyncProgressState {
   isSyncing: boolean;
@@ -15,6 +17,13 @@ export interface SyncProgressState {
   percentage: number;
   statusMessage: string;
   error: string | null;
+}
+
+export interface QuestionSyncTarget {
+  subject: 'physics' | 'chemistry' | 'maths';
+  filename?: string;
+  path?: string;
+  label: string;
 }
 
 const CHUNK_SIZE = 250; // Size of each batch inserted into IndexedDB
@@ -28,42 +37,6 @@ function yieldToMainThread(): Promise<void> {
       setTimeout(resolve, 0);
     }
   });
-}
-
-/**
- * Resolves static data path relative to current deployment base (supporting GitHub Pages subpaths)
- */
-function resolveDataUrl(filename: string): string[] {
-  const base = import.meta.env.BASE_URL || './';
-  const cleanBase = base.endsWith('/') ? base : `${base}/`;
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const pathname = typeof window !== 'undefined' ? window.location.pathname.replace(/\/[^/]*$/, '') : '';
-
-  return [
-    `${cleanBase}data/${filename}`,
-    `./data/${filename}`,
-    `data/${filename}`,
-    `/data/${filename}`,
-    `${origin}${pathname}/data/${filename}`,
-  ];
-}
-
-async function fetchWithFallback(filename: string): Promise<Response> {
-  const candidateUrls = resolveDataUrl(filename);
-  let lastError: Error | null = null;
-
-  for (const url of candidateUrls) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) {
-        return res;
-      }
-    } catch (e: any) {
-      lastError = e;
-    }
-  }
-
-  throw new Error(lastError?.message || `404: Could not locate data/${filename} across candidate paths`);
 }
 
 export function useQuestionLoader(onComplete?: () => void) {
@@ -120,10 +93,10 @@ export function useQuestionLoader(onComplete?: () => void) {
    * One-Click Local Sync: Auto-fetch static JSON files placed in /public/data/
    */
   const syncLocalQuestionLibrary = useCallback(async (
-    targets: Array<{ subject: 'physics' | 'chemistry' | 'maths'; path: string; label: string }> = [
-      { subject: 'physics', path: '/data/physics_pyqs.json', label: 'Physics' },
-      { subject: 'chemistry', path: '/data/chemistry_pyqs.json', label: 'Chemistry' },
-      { subject: 'maths', path: '/data/maths_pyqs.json', label: 'Mathematics' }
+    targets: QuestionSyncTarget[] = [
+      { subject: 'physics', filename: 'physics_pyqs.json', label: 'Physics' },
+      { subject: 'chemistry', filename: 'chemistry_pyqs.json', label: 'Chemistry' },
+      { subject: 'maths', filename: 'maths_pyqs.json', label: 'Mathematics' }
     ]
   ) => {
     isCancelledRef.current = false;
@@ -146,15 +119,12 @@ export function useQuestionLoader(onComplete?: () => void) {
         setProgress(prev => ({
           ...prev,
           currentSubject: target.label,
-          statusMessage: `Fetching ${target.label} question pack from /data/${target.subject}_pyqs.json...`
+          statusMessage: `Fetching ${target.label} question pack...`
         }));
 
-        const response = await fetch(target.path);
-        if (!response.ok) {
-          throw new Error(`Failed to load ${target.label} pack (${response.status} ${response.statusText})`);
-        }
-
-        const questions: QuestionRecord[] = await response.json();
+        const filename = target.filename || (target.path ? target.path.split('/').pop() || target.path : `${target.subject}_pyqs.json`);
+        const questions = await fetchJsonData<QuestionRecord[]>(filename);
+        
         if (!Array.isArray(questions)) {
           throw new Error(`Invalid JSON format in ${target.label} pack: expected array.`);
         }
