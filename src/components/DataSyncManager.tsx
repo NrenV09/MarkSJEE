@@ -6,6 +6,7 @@
 
 import React, { useState } from 'react';
 import { useQuestionLoader } from '../hooks/useQuestionLoader';
+import { OfficialMarksSyncModal } from './OfficialMarksSyncModal';
 import { 
   Database, 
   UploadCloud, 
@@ -18,7 +19,8 @@ import {
   HardDrive,
   FileJson,
   Layers,
-  Sparkles
+  Sparkles,
+  Globe
 } from 'lucide-react';
 
 interface DataSyncManagerProps {
@@ -41,6 +43,7 @@ export const DataSyncManager: React.FC<DataSyncManagerProps> = ({ stats, onDataS
   } = useQuestionLoader(onDataSynced);
 
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isMarksModalOpen, setIsMarksModalOpen] = useState(false);
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
@@ -107,7 +110,15 @@ export const DataSyncManager: React.FC<DataSyncManagerProps> = ({ stats, onDataS
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setIsMarksModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-lg shadow-blue-950 transition active:scale-95 border border-blue-400/30"
+            >
+              <Globe className="w-4 h-4 text-blue-200" />
+              <span>Retrieve from Official MARKS</span>
+            </button>
+
             <button
               disabled={progress.isSyncing}
               onClick={() => syncLocalQuestionLibrary()}
@@ -225,6 +236,13 @@ export const DataSyncManager: React.FC<DataSyncManagerProps> = ({ stats, onDataS
           </button>
         </div>
       </div>
+
+      {/* Official MARKS Platform Sync Modal */}
+      <OfficialMarksSyncModal
+        isOpen={isMarksModalOpen}
+        onClose={() => setIsMarksModalOpen(false)}
+        onQuestionsIngested={onDataSynced}
+      />
     </div>
   );
 };
