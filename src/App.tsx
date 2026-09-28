@@ -5,7 +5,7 @@
  * KaTeX MathView, instant practice mode, and NTA CBT test mode.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   queryQuestions, 
   getChaptersWithCounts, 
@@ -113,28 +113,54 @@ export default function App() {
     fetchQuestions();
   }, [fetchQuestions]);
 
-  // Auto-sync prompt if DB is empty on first load
+  // Auto-sync prompt if DB is missing any subjects on initial load - Cache ALL questions!
+  const isSyncingAllRef = useRef(false);
+
   useEffect(() => {
-    if (dbStats.totalQuestions === 0) {
-      // Auto-load starter library
-      const autoSync = async () => {
+    const shouldCacheAll = 
+      dbStats.totalQuestions === 0 || 
+      dbStats.physicsCount === 0 || 
+      dbStats.chemistryCount === 0 || 
+      dbStats.mathsCount === 0;
+
+    if (shouldCacheAll && !isSyncingAllRef.current) {
+      isSyncingAllRef.current = true;
+      const autoSyncAll = async () => {
         try {
           const { fetchJsonData } = await import('./utils/fetchDataFile');
-          const data = await fetchJsonData('maths_pyqs.json');
-          if (Array.isArray(data) && data.length > 0) {
-            const { bulkInsertQuestionsChunk } = await import('./db/db');
-            await bulkInsertQuestionsChunk(data);
-            await refreshStats();
-            await loadChapters(subject);
-            await fetchQuestions();
+          const { bulkInsertQuestionsChunk } = await import('./db/db');
+
+          const packs: Array<{ name: string; file: string; isMissing: boolean }> = [
+            { name: 'Physics', file: 'physics_pyqs.json', isMissing: dbStats.physicsCount === 0 },
+            { name: 'Chemistry', file: 'chemistry_pyqs.json', isMissing: dbStats.chemistryCount === 0 },
+            { name: 'Mathematics', file: 'maths_pyqs.json', isMissing: dbStats.mathsCount === 0 }
+          ];
+
+          for (const pack of packs) {
+            if (pack.isMissing) {
+              try {
+                const data = await fetchJsonData(pack.file);
+                if (Array.isArray(data) && data.length > 0) {
+                  await bulkInsertQuestionsChunk(data);
+                }
+              } catch (err) {
+                console.warn(`[AutoSync] Could not pre-cache ${pack.name}:`, err);
+              }
+            }
           }
+
+          await refreshStats();
+          await loadChapters(subject);
+          await fetchQuestions();
         } catch (e) {
           // ignore
+        } finally {
+          isSyncingAllRef.current = false;
         }
       };
-      autoSync();
+      autoSyncAll();
     }
-  }, [dbStats.totalQuestions, subject, refreshStats, loadChapters, fetchQuestions]);
+  }, [dbStats.totalQuestions, dbStats.physicsCount, dbStats.chemistryCount, dbStats.mathsCount, subject, refreshStats, loadChapters, fetchQuestions]);
 
   // Question attempt handler
   const handleAnswerSubmit = async (qId: string, answer: any, isCorrect: boolean, timeSpent: number) => {

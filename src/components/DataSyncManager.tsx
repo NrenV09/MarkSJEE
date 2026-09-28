@@ -125,7 +125,7 @@ export const DataSyncManager: React.FC<DataSyncManagerProps> = ({ stats, onDataS
               className="flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold text-xs shadow-lg shadow-indigo-950 transition active:scale-95 disabled:opacity-50"
             >
               <Zap className="w-4 h-4" />
-              <span>One-Click Local Sync</span>
+              <span>Cache All Questions (All Subjects)</span>
             </button>
           </div>
         </div>

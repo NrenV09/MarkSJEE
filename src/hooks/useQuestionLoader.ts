@@ -131,6 +131,7 @@ export function useQuestionLoader(onComplete?: () => void) {
 
         const count = await ingestQuestionsInChunks(questions, target.label);
         grandTotalInserted += count;
+        onComplete?.();
       }
 
       setProgress({

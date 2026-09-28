@@ -3,9 +3,10 @@
  * Interactive modal to connect directly with the official MARKS (MathonGo) platform (web.getmarks.app)
  * Allows users to link their MARKS JWT token, verify their profile, and fetch chapter questions
  * directly from production.getmarks.app into local IndexedDB.
+ * Supports caching ALL questions per chapter, entire subject libraries, or the complete bundled archive.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   ExternalLink, 
@@ -20,11 +21,15 @@ import {
   Check,
   Download,
   Terminal,
-  UserCheck
+  UserCheck,
+  Database,
+  Zap,
+  Square
 } from 'lucide-react';
 import { 
   verifyMarksSession, 
-  fetchMarksChapterQuestions, 
+  fetchMarksChapterQuestions,
+  fetchAllMarksQuestionsForChapter,
   MarksUserProfile 
 } from '../services/marksOfficialApi';
 import { bulkInsertQuestionsChunk } from '../db/db';
@@ -35,17 +40,19 @@ interface OfficialMarksSyncModalProps {
   onQuestionsIngested: () => void;
 }
 
-const JEE_SUBJECT_CHAPTERS = {
+export const JEE_SUBJECT_CHAPTERS = {
   physics: [
     { id: 'kinematics', title: 'Kinematics (1D & 2D)' },
     { id: 'laws-of-motion', title: 'Laws of Motion & Friction' },
     { id: 'work-power-energy', title: 'Work, Power & Energy' },
     { id: 'rotational-motion', title: 'Rotational Motion' },
+    { id: 'gravitation', title: 'Gravitation' },
     { id: 'electrostatics', title: 'Electrostatics & Gauss Law' },
     { id: 'current-electricity', title: 'Current Electricity' },
     { id: 'magnetic-effects-of-current', title: 'Magnetic Effects of Current' },
     { id: 'electromagnetic-induction', title: 'Electromagnetic Induction & AC' },
     { id: 'optics', title: 'Ray & Wave Optics' },
+    { id: 'thermodynamics-physics', title: 'Thermodynamics & Kinetic Theory' },
     { id: 'modern-physics', title: 'Modern Physics & Dual Nature' }
   ],
   chemistry: [
@@ -54,6 +61,8 @@ const JEE_SUBJECT_CHAPTERS = {
     { id: 'chemical-bonding-and-molecular-structure', title: 'Chemical Bonding' },
     { id: 'chemical-thermodynamics', title: 'Thermodynamics & Energetics' },
     { id: 'chemical-and-ionic-equilibrium', title: 'Chemical & Ionic Equilibrium' },
+    { id: 'solutions', title: 'Solutions & Colligative Properties' },
+    { id: 'electrochemistry', title: 'Electrochemistry' },
     { id: 'coordination-compounds', title: 'Coordination Compounds' },
     { id: 'p-block-elements', title: 'p-Block Elements' },
     { id: 'general-organic-chemistry', title: 'General Organic Chemistry (GOC)' },
@@ -66,12 +75,14 @@ const JEE_SUBJECT_CHAPTERS = {
     { id: 'matrices-and-determinants', title: 'Matrices & Determinants' },
     { id: 'permutations-and-combinations', title: 'Permutations & Combinations' },
     { id: 'binomial-theorem', title: 'Binomial Theorem' },
+    { id: 'sequence-and-series', title: 'Sequence & Series' },
     { id: 'limits-continuity-and-differentiability', title: 'Limits, Continuity & Differentiability' },
     { id: 'application-of-derivatives', title: 'Application of Derivatives' },
     { id: 'indefinite-and-definite-integrals', title: 'Integrals (Definite & Indefinite)' },
     { id: 'differential-equations', title: 'Differential Equations' },
     { id: 'coordinate-geometry-straight-lines', title: 'Coordinate Geometry (Lines & Circles)' },
-    { id: 'vectors-and-3d-geometry', title: 'Vector Algebra & 3D Geometry' }
+    { id: 'vectors-and-3d-geometry', title: 'Vector Algebra & 3D Geometry' },
+    { id: 'probability', title: 'Probability & Statistics' }
   ]
 };
 
@@ -98,6 +109,8 @@ export const OfficialMarksSyncModal: React.FC<OfficialMarksSyncModalProps> = ({
   const [fetchStatus, setFetchStatus] = useState<string | null>(null);
   const [fetchCount, setFetchCount] = useState<number>(0);
 
+  const isCancelledRef = useRef<boolean>(false);
+
   // Load saved token from localStorage on mount
   useEffect(() => {
     const savedToken = localStorage.getItem('marks_official_token');
@@ -106,7 +119,6 @@ export const OfficialMarksSyncModal: React.FC<OfficialMarksSyncModalProps> = ({
       verifyMarksSession(savedToken)
         .then(profile => setUserProfile(profile))
         .catch(() => {
-          // Token expired or invalid
           localStorage.removeItem('marks_official_token');
         });
     }
@@ -148,12 +160,20 @@ export const OfficialMarksSyncModal: React.FC<OfficialMarksSyncModalProps> = ({
     setTimeout(() => setCopiedSnippet(false), 2000);
   };
 
-  const handleFetchQuestions = async () => {
+  const cancelSync = () => {
+    isCancelledRef.current = true;
+    setFetchStatus('Sync cancelled by user.');
+    setIsFetching(false);
+  };
+
+  // Fetch batch of questions for selected chapter
+  const handleFetchBatch = async () => {
     if (!token.trim()) {
       setAuthError('Authentication token is required to fetch questions.');
       return;
     }
 
+    isCancelledRef.current = false;
     setIsFetching(true);
     setFetchStatus('Connecting to production.getmarks.app...');
     setFetchCount(0);
@@ -182,6 +202,139 @@ export const OfficialMarksSyncModal: React.FC<OfficialMarksSyncModalProps> = ({
       onQuestionsIngested();
     } catch (err: any) {
       setFetchStatus(`Fetch failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  // Cache ALL questions for the selected chapter (paginated loop)
+  const handleCacheAllInChapter = async () => {
+    if (!token.trim()) {
+      setAuthError('Authentication token is required to fetch questions.');
+      return;
+    }
+
+    isCancelledRef.current = false;
+    setIsFetching(true);
+    setFetchCount(0);
+
+    const chapterId = customChapterSlug.trim() || selectedChapter;
+    setFetchStatus(`Caching ALL questions for ${selectedSubject.toUpperCase()} / ${chapterId}...`);
+
+    try {
+      const allQ = await fetchAllMarksQuestionsForChapter({
+        token,
+        subjectId: selectedSubject,
+        chapterId,
+        onProgress: (loaded, total) => {
+          setFetchCount(loaded);
+          setFetchStatus(`Retrieved ${loaded} / ${total || '?'} questions from MARKS...`);
+        },
+        shouldCancel: () => isCancelledRef.current
+      });
+
+      if (allQ.length > 0) {
+        setFetchStatus(`Saving ${allQ.length} questions into local IndexedDB...`);
+        await bulkInsertQuestionsChunk(allQ);
+        setFetchCount(allQ.length);
+        setFetchStatus(`Successfully cached ALL ${allQ.length} questions from ${chapterId}!`);
+        onQuestionsIngested();
+      } else {
+        setFetchStatus('No questions returned for this chapter.');
+      }
+    } catch (err: any) {
+      setFetchStatus(`Sync error: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  // Cache ALL chapters across ALL 3 subjects from official MARKS
+  const handleCacheEntireLibrary = async () => {
+    if (!token.trim()) {
+      setAuthError('Authentication token is required to fetch questions.');
+      return;
+    }
+
+    isCancelledRef.current = false;
+    setIsFetching(true);
+    setFetchCount(0);
+    setFetchStatus('Starting Full MARKS JEE Library Sync across all subjects...');
+
+    let grandTotal = 0;
+    try {
+      const subjects: Array<'physics' | 'chemistry' | 'maths'> = ['physics', 'chemistry', 'maths'];
+
+      for (const sub of subjects) {
+        if (isCancelledRef.current) break;
+        const chapters = JEE_SUBJECT_CHAPTERS[sub];
+
+        for (const ch of chapters) {
+          if (isCancelledRef.current) break;
+          setFetchStatus(`Syncing ${sub.toUpperCase()}: ${ch.title}... (${grandTotal} cached so far)`);
+
+          try {
+            const questions = await fetchAllMarksQuestionsForChapter({
+              token,
+              subjectId: sub,
+              chapterId: ch.id,
+              onProgress: (loaded) => {
+                setFetchStatus(`Syncing ${sub.toUpperCase()}: ${ch.title} (${loaded} qs)... Total: ${grandTotal + loaded}`);
+              },
+              shouldCancel: () => isCancelledRef.current
+            });
+
+            if (questions.length > 0) {
+              await bulkInsertQuestionsChunk(questions);
+              grandTotal += questions.length;
+              setFetchCount(grandTotal);
+              onQuestionsIngested();
+            }
+          } catch (e: any) {
+            console.warn(`[MarksSync] Skipped ${ch.id}:`, e);
+          }
+        }
+      }
+
+      setFetchStatus(`Full sync complete! Total ${grandTotal.toLocaleString()} questions cached in IndexedDB.`);
+    } catch (err: any) {
+      setFetchStatus(`Library sync stopped: ${err.message || 'Error occurred'}`);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  // Cache ALL pre-bundled offline packs (Physics, Chemistry, Maths)
+  const handleCacheAllOfflineArchive = async () => {
+    isCancelledRef.current = false;
+    setIsFetching(true);
+    setFetchCount(0);
+    setFetchStatus('Loading complete offline question archive...');
+
+    try {
+      const { fetchJsonData } = await import('../utils/fetchDataFile');
+      const packs: Array<{ name: string; file: string }> = [
+        { name: 'Physics', file: 'physics_pyqs.json' },
+        { name: 'Chemistry', file: 'chemistry_pyqs.json' },
+        { name: 'Mathematics', file: 'maths_pyqs.json' }
+      ];
+
+      let total = 0;
+      for (const p of packs) {
+        if (isCancelledRef.current) break;
+        setFetchStatus(`Caching ${p.name} library...`);
+        const data = await fetchJsonData(p.file);
+        if (Array.isArray(data)) {
+          await bulkInsertQuestionsChunk(data);
+          total += data.length;
+          setFetchCount(total);
+          onQuestionsIngested();
+        }
+      }
+
+      setFetchStatus(`All ${total.toLocaleString()} questions successfully cached into IndexedDB!`);
+    } catch (err: any) {
+      setFetchStatus(`Failed to cache archive: ${err.message}`);
     } finally {
       setIsFetching(false);
     }
@@ -344,7 +497,7 @@ export const OfficialMarksSyncModal: React.FC<OfficialMarksSyncModalProps> = ({
           <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 space-y-4">
             <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
               <Download className="w-4 h-4 text-indigo-400" />
-              <span>Fetch & Cache Questions into IndexedDB</span>
+              <span>Cache Questions from Official MARKS API</span>
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -407,24 +560,58 @@ export const OfficialMarksSyncModal: React.FC<OfficialMarksSyncModalProps> = ({
               />
             </div>
 
-            {/* Action Button */}
-            <button
-              disabled={isFetching || !token.trim()}
-              onClick={handleFetchQuestions}
-              className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition active:scale-95 flex items-center justify-center gap-2"
-            >
-              {isFetching ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                  <span>Fetching from production.getmarks.app...</span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4" />
-                  <span>Fetch Official Questions & Cache Offline</span>
-                </>
+            {/* Action Buttons */}
+            <div className="space-y-2 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  disabled={isFetching || !token.trim()}
+                  onClick={handleFetchBatch}
+                  className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 border border-slate-700"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-300" />
+                  <span>Fetch Batch ({fetchLimit} Qs)</span>
+                </button>
+
+                <button
+                  disabled={isFetching || !token.trim()}
+                  onClick={handleCacheAllInChapter}
+                  className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center gap-1.5"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Cache ALL in Chapter</span>
+                </button>
+              </div>
+
+              {/* Master Full Library Cache */}
+              <button
+                disabled={isFetching || !token.trim()}
+                onClick={handleCacheEntireLibrary}
+                className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white font-black text-xs rounded-xl shadow-lg transition active:scale-95 flex items-center justify-center gap-2 border border-blue-400/30"
+              >
+                {isFetching ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                    <span>Syncing from production.getmarks.app...</span>
+                  </>
+                ) : (
+                  <>
+                    <Database className="w-4 h-4 text-emerald-300" />
+                    <span>Cache ENTIRE Library from MARKS (All 3 Subjects)</span>
+                  </>
+                )}
+              </button>
+
+              {/* Cancel Button if running */}
+              {isFetching && (
+                <button
+                  onClick={cancelSync}
+                  className="w-full py-2 bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
+                >
+                  <Square className="w-3.5 h-3.5" />
+                  <span>Stop / Cancel Sync</span>
+                </button>
               )}
-            </button>
+            </div>
 
             {/* Status Message */}
             {fetchStatus && (
@@ -438,15 +625,28 @@ export const OfficialMarksSyncModal: React.FC<OfficialMarksSyncModalProps> = ({
             )}
           </div>
 
-          {/* Pre-Bundled Archive Note */}
-          <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-900/40 text-xs text-slate-300 space-y-1.5">
-            <div className="font-bold text-indigo-300 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-indigo-400" />
-              <span>Offline Question Archive (Already Included)</span>
+          {/* Pre-Bundled Archive Section with 1-Click Cache ALL */}
+          <div className="p-5 rounded-2xl bg-indigo-950/30 border border-indigo-900/50 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="font-bold text-indigo-300 flex items-center gap-2 text-xs">
+                  <Layers className="w-4 h-4 text-indigo-400" />
+                  <span>Pre-Bundled Offline Question Archive (15,000+ PYQs)</span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                  Authentic JEE Main & Advanced archive for Physics, Chemistry, and Mathematics (2002–2026) with full KaTeX formulas, answer keys, and step-by-step solutions.
+                </p>
+              </div>
+
+              <button
+                disabled={isFetching}
+                onClick={handleCacheAllOfflineArchive}
+                className="shrink-0 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold text-xs shadow-lg transition active:scale-95 flex items-center gap-1.5"
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>Cache All Bundled PYQs</span>
+              </button>
             </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Don't have a MARKS account? MarksJEE already ships with an authentic offline JEE Main archive covering Physics, Chemistry, and Mathematics from 2002–2026 with full LaTeX math formulas, chapter breakdown, and CBT mock exam mode. You can load it anytime with <strong>One-Click Local Sync</strong>.
-            </p>
           </div>
         </div>
 

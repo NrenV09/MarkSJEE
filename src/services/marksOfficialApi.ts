@@ -241,3 +241,52 @@ export async function fetchMarksChapterQuestions(params: {
     hasMore: Boolean(json.data?.hasMore || (offset + parsed.length < (json.data?.total || 0)))
   };
 }
+
+/**
+ * Fetches all questions for a given chapter, paginating until exhausted
+ */
+export async function fetchAllMarksQuestionsForChapter(params: {
+  token: string;
+  examId?: string;
+  subjectId: string;
+  chapterId: string;
+  onProgress?: (loaded: number, total: number) => void;
+  shouldCancel?: () => boolean;
+}): Promise<QuestionRecord[]> {
+  const allQuestions: QuestionRecord[] = [];
+  let offset = 0;
+  const limit = 50;
+  let hasMore = true;
+
+  while (hasMore) {
+    if (params.shouldCancel?.()) {
+      break;
+    }
+
+    const res = await fetchMarksChapterQuestions({
+      token: params.token,
+      examId: params.examId,
+      subjectId: params.subjectId,
+      chapterId: params.chapterId,
+      limit,
+      offset
+    });
+
+    if (res.questions.length === 0) {
+      break;
+    }
+
+    allQuestions.push(...res.questions);
+    offset += res.questions.length;
+    params.onProgress?.(allQuestions.length, res.totalAvailable);
+
+    if (!res.hasMore || allQuestions.length >= res.totalAvailable) {
+      hasMore = false;
+    } else {
+      // Modest pause to be polite to the server
+      await new Promise(r => setTimeout(r, 100));
+    }
+  }
+
+  return allQuestions;
+}
